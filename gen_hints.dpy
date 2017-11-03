@@ -1,0 +1,150 @@
+.. _gen_hints:
+
+GEN_HINTS: утилита для формирование хинтов для JS
+=================================================
+
+Обрабатывает файл(ы) с определениями и формирует массив хинтов JS 
+важный побочный эффект - преобразует :ref: директивы в ссылки вида "см. Документацию" (пока 
+непонятно, удастся ли дать более точный текст для ссылки).
+
+Ориентируется на механизм меток (labels) reST
+
+Как это работает (в-целом):
+
+* по словарям (пока утилита ориентируется именно на словарные статьи) утилита формирует пары "имя":"описание" (см. примеры ниже) в JS файле
+  * пробелы в именах заменяются на подчеркивания
+* этот файл включается в JS обработчика формы
+* эти пары используются в универсальном JS форм для формирования Bootstrap popover (см. фрагмент кода ниже)
+  * в элементе формы должен быть тэг "help_id" - он должен содержать имя хинта (с подчеркиваниями), этот элемент формы будет дополнен "вопросиками" (см. пример формы ниже)
+  * проверено и работает в том числе для кнопок (клик на вопросики не приводит к нажатию на кнопку)
+  * если в словарной статье есть reST ссылка, она преобразуется в HREF ссылку на документацию (предполагается, что словарные статьи корректно связаны ссылками)
+  * производится обратное преобразования имени (подчеркивания заменяются на пробелы)
+* в JS код вставляется обработка переключателя "показывать-не показывать хинты" (см. фрагмент кода ниже)
+
+Пример результирующего JS файла
+
+::
+
+   <script type="text/javascript">
+   var helpTexts = {
+      'Метка':'метками можно "раскрасить" тесты и/или проекты.       В текущей версии не используются (на будущее).',
+      'Библиотека':'стандартные и свои библиотеки в понимании Robot Framework.',
+      'Статус':'состояние теста, влияет на возможные действия с тестом, см. <a href="http://z14-0510-wiksap/docu/rfwb/models.html#teststatus" target="_blank">см. Документацию</a>.',
+
+Пример универсального JS обработчика
+
+::
+       
+   for ( t in helpTexts ){
+      $('[help_id="'+t+'"]').append(' <sup class="help" data-container="body" data-toggle="popover" id="'+t+'">??</sup>'); // формируем "вопросики"
+      $("#"+t).attr("title",t.replace(/_/g, " "));       // возвращаем пробелы в имя
+      $("#"+t).attr("data-content",helpTexts[t]);        // формируем текст поповера
+   }
+   $('[data-toggle="popover"]').popover({html:true});    // инициализируем поповер для наших хинтов
+   $('[data-toggle="popover"]').click(function(e) {      // для всех дизейблим клики в родительские элементы (для кнопок актуально)
+      e.stopPropagation();
+   });
+
+Пример HTML формы с хинтом
+
+::
+       
+   <label class="col-md-2 text-right" for="InputStat" help_id="Статус">Статус</label>
+   <div class="col-md-1"><input type="text" class="form-control" id="InputStat" readonly value="Actual"></div>       
+
+Фрагмент JS кода переключения режима показа хинтов
+
+::
+       
+   $("#c6").click(function(e) {
+       e.preventDefault();
+       $('[data-toggle="popover"]').toggle();
+   });
+
+
+<<Зависимости>>=
+
+import argparse
+import os
+
+<<*cvtRef|type=function>>=
+< ttxt: строка с определением из словаря
+< ld: словарь [имя метки] = имя файла
+> строка: HTML для вставки
+Пребразует :ref: в ссылку, используя имя метки и словарь
+
+Предполагаем, что в определении не может быть более одной ссылки
+<--->
+
+    if ttxt.find(":ref:`")<=0:	# нет ссылок - ничего не делаем
+        return ttxt
+
+    lbl = ttxt.split(":ref:`")[1].split("`")[0]
+    pref = ttxt.split(":ref:`")[0]
+    suff = ttxt.split(":ref:`{0}`".format(lbl))[1]
+    fn = "index.html"
+    if lbl in ld:
+        fn = ld[lbl].replace(".rst",".html")
+    lnk = '<a href="http://z14-0510-wiksap/docu/rfwb/{0}#{1}" target="_blank">см. Документацию</a>'.format(fn,lbl)
+    return pref + lnk + suff
+
+<<doWork|type=function>>=
+Функция, которая все и делает.
+<--->
+
+    <<GEN_HINTS: Разбор командной строки>>
+    
+    # первый проход - формируем словарь меток
+    lblDict = {}
+    for fl in args.files:
+        try:
+            f = open( fl, "rt" )
+        except:
+            print ( "Не получается открыть исходный фqайл {0}".format(fl) )
+            return
+        for ln in f:
+            ln = ln.strip()
+            if ln.find(".. _")==0 and ln[-1]==":": 	# нашли метку
+                lbl = ln.split(".. _")[1].split(":")[0]
+                lblDict[lbl] = fl
+                
+    # второй проход - генерируем хинты, преобразуя :ref:
+    dStr = '<script type="text/javascript">\nvar helpTexts = {\n'
+    dList = []
+    for fl in args.files:
+        f = open( fl, "rt" )
+        # находим определения
+        buf = f.read()
+        f.close()
+        if buf.find(".. glossary::")<0:
+            print ( "В файле {0} нет словарной статьи".format(fl) )
+            continue
+        for defn in buf.split(".. glossary::")[1:]:
+            defn = defn.strip()
+            dt = defn.split(":")[0].strip().replace(" ","_")
+            dd = " ".join(defn.split("\n\n")[0].split("\n")[1:]).strip()
+            dd = cvtRef ( dd, lblDict )
+            dList.append("    '{0}':'{1}'".format(dt,dd))
+
+    dStr += ",\n".join(dList) + '\n};\n</script>\n'
+
+    of = open ( args.ofile, "w" )
+    of.write(dStr)
+    of.close()
+
+doWork()
+    
+@
+#<algorithms.hints
+
+<<GEN_HINTS: Разбор командной строки>>==
+Параметры запуска утилиты
+<--->
+parser = argparse.ArgumentParser(description='Формирует ассоциативный массив (объект) с хинтами для JS')
+parser.add_argument('-o','--ofile', default='hints_data.js', help='имя файла результата')
+parser.add_argument('files', metavar='file', nargs='+', help='файл с глоссарием')
+args = parser.parse_args()
+
+@
+#>algorithms.hints
+

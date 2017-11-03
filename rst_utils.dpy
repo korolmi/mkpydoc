@@ -1,0 +1,183 @@
+.. _rst_utils:
+
+RST_UTILS: утилиты поддержки reST
+=================================
+
+<<Параметры получающейся таблицы>>=
+
+maxLen = 200 # общая длина строки таблицы (имя описание имя описание)
+maxName = 30 # длина имени
+maxDesc = 70 # длина описания
+
+<<*genFuncParsTable|type=function>>=
+< lp: список параметров в формате (см. ниже)
+> строка: собственно таблица с параметрами функции
+
+на вход приходит список параметров, каждый элемент списка - тоже список
+        - тип (входной = True)
+        - имя
+        - описание
+
+В результате получается таблица в виде черточек и палочек...
+
+Пока остановились на версии с фискированными размерами (раньше было гибко - считали длины и т.п.).
+
+Возможно, сделаем настройку - длины частей, может, пресеты.
+
+<--->
+
+    inPars = []
+    outPars = []
+
+    sepNameMin = "-" * (maxName)
+    sepNameEq =  "=" * (maxName)
+    sepDescMin = "-" * (maxDesc)
+    sepDescEq =  "=" * (maxDesc)
+
+    # формируем заголовок
+    resStr = "+{0}+{1}+{0}+{1}+\n".format(sepNameMin,sepDescMin)
+    resStr += "|{0}|{1}|\n".format(addSpc("ПАРАМЕТРЫ",maxName+maxDesc+1),addSpc("РЕЗУЛЬТАТЫ",maxName+maxDesc+1))
+    resStr += "+{0}+{1}+{0}+{1}+\n".format(sepNameEq,sepDescEq)
+
+    # разделяем параметры на вход и выход (добавляя строки, если имя или описание длинное)
+    # списки in/outPars содержат списки имен и описаний (каждый такой список может содержать и в большинстве случаев содержит один элемент - собственно, имя или описание)
+    for p in lp:
+        if p[0]:
+            appendPars(inPars,p[1],maxName,p[2],maxDesc)
+        else:
+            appendPars(outPars,p[1],maxName,p[2],maxDesc)
+
+    # выравниваем количества строк в списках параметров
+    for i in range( (max(len(inPars),len(outPars))-min(len(inPars),len(outPars)) ) ):
+        if len(outPars)>len(inPars):
+            appendPars(inPars," ",maxName," ",maxDesc)
+        else:
+            appendPars(outPars," ",maxName," ",maxDesc)
+    for i in range(len(inPars)):
+        extendPars(i,inPars,outPars)
+    
+    # формируем собственно таблицу
+    for i in range(len(inPars)):
+        for j in range(len(inPars[i][0])):
+            resStr += "|{0}|{1}|{2}|{3}|\n".format(addSpc(inPars[i][0][j],maxName,True),addSpc(inPars[i][1][j],maxDesc),addSpc(outPars[i][0][j],maxName,True),addSpc(outPars[i][1][j],maxDesc))
+        resStr += "+{0}+{1}+{0}+{1}+\n".format(sepNameMin,sepDescMin)
+    resStr += "\n"
+
+    return resStr
+
+<<addSpc|type=function>>=
+< s: строка, которую нужно дополнить пробелами
+< n: длина результирующей строки
+< b=False: нужно ли выводить болдом
+> строка: собственно строка, дополненная пробелами и с болдом, если нужно
+
+Удобно использовать при рисовании таблиц.
+
+<--->
+
+    if len(s.strip())==0:	# пустая строка - ничего не делаем, выводим просто n пробелов
+        return " "*n
+    
+    n = n-4 if b else n # учли болдовость в длине
+    if len(s)>n:	# такого, по идее, не должно быть, но... обрежем
+        s = s[:n]
+    res = "**{0}**{1}".format(s," "*(n-len(s))) if b else "{0}{1}".format(s," "*(n-len(s)))
+
+    return res
+
+<<appendPars|type=function>>=
+< l: список, в который добавляем данные о параметрах
+< n: имя параметра
+< ln: его макс длина
+< d: описание параметра
+< ld: его макс длина
+
+Учитывает длины - разбивает длинные строки по последним ближайшим пробелам.
+
+<--->
+
+    nList = prepList(n,ln)
+    dList = prepList(d,ld)
+
+    l.append([nList,dList])
+
+<<prepList|type=function>>=
+< n: параметр
+< ln: его макс длина
+> список: список из параметра (если он влез) или из двух элементов (начало конец)
+
+Используется локально в appendPars
+
+Немного заложились - учитываем потенциальную болдовость, т.е. еще 4 символа к длине
+<--->
+
+    if len(n)>ln-4:	# нужно разбить имя
+        fp = []
+        lp = []
+        for w in n.split(" "):
+            if len(" ".join(fp) + " " + w)>ln-4:
+                lp.append(w)
+            else:
+                fp.append(w)
+        resList = [" ".join(fp), " ".join(lp)]
+    else:
+        resList = [ n ]
+
+    return resList
+
+<<extendPars|type=function>>=
+< i: индекс элемента
+< il: список входных параметров
+< ol: список выходных параметров
+
+Выравнивает длины списков в пределах строки, т.е. делает так, что если в каком-то
+из списков в этой строке строка разбилась, то добавляем пустую строку в неразбитую часть.
+Т.е. после выравнивания мы можем "циклиться" по первому элементу первого списка
+
+примеры
+
+il[i]: [["123"],["qqq"]]
+ol[i]: [["111","222"],["www"]]
+
+в результате должно получиться
+
+il[i]: [["123"," "],["qqq"," "]]
+ol[i]: [["111","222"],["www"," "]]
+
+<--->
+    maxLen = max(len(il[i][0]),len(il[i][1]),len(ol[i][0]),len(ol[i][1]))
+    for k in range(maxLen):
+        if k>len(il[i][0])-1:
+            il[i][0].append(" ")
+        if k>len(il[i][1])-1:
+            il[i][1].append(" ")
+        if k>len(ol[i][0])-1:
+            ol[i][0].append(" ")
+        if k>len(ol[i][1])-1:
+            ol[i][1].append(" ")
+
+if __name__ == "__main__":
+
+    # только входной параметр
+    print(genFuncParsTable([[True,"par","description"]]))
+
+    # только выходной
+    print(genFuncParsTable([[False,"par","description"]]))
+
+    # два входных с пустым описанием
+    print(genFuncParsTable([[True,"par1","description1"],[True,"par2",""]]))
+    
+    # два входных один выходной
+    print(genFuncParsTable([[True,"par1","description1"],[True,"par2","description2"],[False,"res","res desc"]]))
+
+    # два входных (один длинное имя) один выходной
+    print(genFuncParsTable([[True,"par1 par2 par3 par4 par5 par6 par7 par8 par9 par0","description1"],[True,"par2","description2"],[False,"res","res desc"]]))
+
+    # два входных (один длинное имя) два выходных (у второго - очень длинное описание, не влезает в две строки - режется)
+    print(genFuncParsTable([[True,"par1 par2 par3 par4 par5 par6 par7 par8 par9 par0","description1"],
+                            [True,"par2","description2"],
+                            [False,"res1","res desc"],
+                            [False,"res2","res descr 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 1234567890 "]
+    ]))
+    
+    

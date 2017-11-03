@@ -1,0 +1,257 @@
+.. _mkpydoc:
+
+MKPYDOC: Генератор кода и документации
+======================================
+
+#TODO: подумать еще раз над концепцией алгоритмов (как лучше отрабатывать именования файлов)
+#TODO: дополнительная опция в чанке - уровень индента (необязательный). Иначе не получается описывать методы своих классов
+
+<<Зависимости>>=
+
+import argparse
+import os
+import ch_utils
+
+<<*doParse|type=function>>=
+парсит исходный файл и вызывает обработчиков
+<--->
+
+    <<MKPYDOC: Разбор командной строки>>
+
+    global src_mod_name
+    
+    try:
+        f = open( args.ifile, "r" )
+    except:
+        print ( "Не получается открыть исходный файл {0}".format(args.ifile) )
+        return 
+
+    src_mod_name = args.ifile.split(".")[0]
+    
+    buf = f.read()
+    f.close()
+
+    allChunks = createChunks(buf)
+
+    doPyFile ( args.spath, args.ifile, allChunks, args.pexec )
+    doRstFile ( args.dpath, args.ifile, allChunks )
+
+    aFiles = []
+    for c in buf.split(ch_utils.CH_PART_START)[1:]:	
+        algChunks = createChunks ( "\n".join(c.split("\n")[1:]).split(ch_utils.CH_PART_END)[0] ) 
+        fn = c.split("\n")[0] + ".rstp"
+        doRstFile ( args.dpath, fn, algChunks, True )
+        an = fn.split(".")[0]	    	       # имя алгоритма - до точки
+        if an not in aFiles:
+            aFiles.append(an)
+
+    doRegenAlgs( args.dpath,aFiles )	       # собираем измененные описания алгоритмов
+
+<<createChunks|type=function>>=
+< aStr: строка, из которой нарезать чанки
+> список: информация о чанках (см. ниже)
+
+Создает список чанков из строки, в списке
+
+- True, если это - DOC чанк
+- имя чанка
+- тело чанка
+
+В документационный чанк не вставляется "собака"
+<--->
+
+    cLst = []
+    cStr = ""
+    cName = ""
+    isDocChunk = True
+
+    # разбираем построчно
+    for ln in aStr.split("\n"):
+        
+        if ch_utils.isChunkDef(ln):
+            cLst.append([isDocChunk,cName,cStr])
+            cStr = ""
+            cName = ch_utils.getChunkName( ln )
+            isDocChunk = False
+
+        if ln.find(ch_utils.CH_DOC)==0 and len(ln)==1:	
+            cLst.append([isDocChunk,cName,cStr])
+            cStr = ""
+            cName = ""
+            isDocChunk = True
+        else:	# не будем вставлять в начало докчанка собаку...
+            cStr += ln + "\n"
+
+    # последний чанк
+    cLst.append([isDocChunk,cName,cStr])
+
+    return cLst
+
+<<doRegenAlgs|type=function>>=
+< dp: директория, куда писать результирующий файл
+< af: список имен алгоритмов (см. ниже)
+
+Собирает описания алгоритмов.
+Алгоритмы изначально генерируются в файлы с именами вида _alg_._partname_.rstp.
+
+В результате работы этой функции они конкатенируются в _alg_.rst (при этом partname теряется -
+она нужна только для обеспечения уникальности части алгоритма.
+                                                                  
+Подразумевается, что заголовок алгоритма вручную создаются в файле, например, _alg_.0.rstp - он окажется 
+в начале результирующего RST файла в результате работы функции.
+                                                                  
+Этот же механизм исползуется в определениях - см. соотв генератор.
+<--->                                                    
+
+    for a in af:
+        os.system ( "cat {0}/{1}.*.rstp > {0}/{1}.rst".format(dp,a) )
+
+<<genChunkPy|type=function>>=
+< cStr: тело чанка
+< cType: тип чанка
+< addDetChunks=False: признак генерации кода для чанков второго уровня
+> строка: код на питоне для вставки в исходник
+Вызов метода производства исходника генератора заданного типа.
+                                                                  
+Возвращает код (строки с ньюлайнами), который просто переносится в исходник.
+<--->
+
+    mod = __import__ ( cType )		
+    return getattr(mod,"genChunkSrc") ( cStr, addDetChunks )
+
+<<genChunkRst|type=function>>=
+< cStr: тело чанка
+< cType: тип чанка
+> строка: RST документация по чанку                                                                  
+Вызов метода производства rst генератора заданного типа
+возвращает код (строки с ньюлайнами), который просто переносится в rst
+
+Пока сделал отдельный вызов для генерации документации для функций - им для
+генерации референса нужно знать имя исходного файла...
+
+Может быть, потом убрать - сделать единообразно.                                                                  
+<--->
+
+    global src_mod_name
+
+    mod = __import__ ( cType )
+    if cType=="function":
+        return getattr(mod,"genChunkDoc") ( cStr, src_mod_name ) # имя модуля нужно для референса
+    else:
+        return getattr(mod,"genChunkDoc") ( cStr )	
+
+<<doPyFile|type=function>>=
+< sp: директория,
+< fn: имя исходного файла,
+< cl: список с информацией о чанках
+< pv: номер версии питона (0 = не генерить мэджик и не делать исполнимым)
+                                                                  
+Cохраняет чанки с кодом в питонный исходник
+
+Если последний параметр - не "0", то в начало файла вставляется мэджик строка в стиле Юникса. и файл делается исполнымым                                                                
+<--->
+
+    pyFname = ".".join(fn.split(".")[0:-1]) + ".py"
+    f = open(sp+"/"+pyFname,"w")
+    if pv!="0": # нужно делать исполнимый файл
+        f.write("#!/usr/bin/python")
+        if pv=="3": 
+            f.write("3")
+        f.write("\n")
+                                                                  
+    for l in cl:
+        if not l[0] :	                                             # не док чанк
+            chType = ch_utils.getChunkType ( l[2].split("\n")[0] )   # извлекаем тип чанка
+            cBody = insChunks( cl, l[2]  ) 			     # вставляем чанки
+            cBody = genChunkPy ( cBody, chType )		     # вызов генератора (генерация исходника)
+            f.write( cBody ) 					     # пишем в файл
+
+    f.close()
+    if pv!="0": # нужно делать исполнимый файл
+        os.chmod( sp+"/"+pyFname, 0o755 )                                                        
+    return
+
+<<doRstFile|type=function>>=
+< dp: директория
+< fn: имя исходного файла
+< cl: список с информацией о чанках
+< isAlg=False: алгоритмы обрабатываются особым образом
+Генерирует документационный файл по модулю или по алгоритмам
+<--->
+                                                                  
+    if not isAlg:
+        rstFname = ".".join(fn.split(".")[0:-1]) + ".rst"
+    else:	# для алгоритмов мы задаем файл явно (чтобы облегчить сборку)
+        rstFname = fn
+
+    f = open(dp+"/"+rstFname,"w")
+
+    for l in cl:
+        if l[0]:						      # док чанк
+            if isAlg:						      # для алгоритмов пишем заголовок и тело
+                tit = l[2].split("\n")[0]
+                body = "\n".join(l[2].split("\n")[1:])
+                f.write(tit + "\n")
+                f.write("*"*len(tit)+"\n")
+                f.write(body)					      # просто копируем тело чанка в документацию
+            else:
+                f.write(l[2])					      # просто копируем тело чанка в документацию
+        else:							      # не док чанк - вызываем генератор
+            chType = ch_utils.getChunkType ( l[2].split("\n")[0] )    # извлекаем тип чанка
+            cBody = genChunkRst ( l[2], chType )		      # вызов генератора (генерация rst)
+            f.write ( cBody )					      # пишем в файл
+
+    f.close()
+
+    return
+
+<<insChunks|type=function>>=
+< cl: список с информацией о чанках
+< aStr: тело чанка
+> строка: модифицированное тело чанка                                                                  
+Вставляет в тело чанка - aStr - определения используемых в нем чанков, первый параметр - список всех чанков
+<--->
+
+    resStr = ""
+    for l in aStr.split("\n"):
+        if ch_utils.isChunkUsage(l):		# нужно вставить чанк
+            cName = ch_utils.getChunkName(l)
+            indentStr = l.split("<<")[0]
+            cFound = None
+            for cn in cl:
+                if cn[1]==cName:
+                    cFound = cn
+                    break
+            if cFound is not None:
+                chType = ch_utils.getChunkType ( cFound[2].split("\n")[0] )	# извлекаем тип чанка
+                cBody = genChunkPy ( cFound[2], chType, True )			# вызов генератора (генерация исходника)
+                lines = cBody.split("\n")
+                for cc in lines:
+                    resStr += indentStr + cc + "\n"
+            else:
+                resStr += indentStr + "# ERROR: chunk not found: " + cName + "\n"
+        else:
+            resStr += l + "\n"
+    
+    return resStr
+
+<<main>>=
+
+doParse()
+
+@
+#<algorithms.args
+
+<<MKPYDOC: Разбор командной строки>>==
+Параметры запуска утилиты
+<--->
+parser = argparse.ArgumentParser(description='Преобразует .dpy в .py и .rst')
+parser.add_argument('-x','--pexec', help='Генерить исполнимый файл с мэджиком для заданной версии питона (2 или 3)',required=False,default="0")
+parser.add_argument('-i','--ifile', help='Входной файл',required=True)
+parser.add_argument('-s','--spath', help='Директория с исходниками',default=".")
+parser.add_argument('-d','--dpath', help='Директория с файлами документации',default=".")
+args = parser.parse_args()
+
+@
+#>algorithms.args
+
